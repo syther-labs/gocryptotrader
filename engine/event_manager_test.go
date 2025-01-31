@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/thrasher-corp/gocryptotrader/currency"
+	exchange "github.com/thrasher-corp/gocryptotrader/exchanges"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/asset"
+	"github.com/thrasher-corp/gocryptotrader/exchanges/ticker"
 )
 
 func TestSetupEventManager(t *testing.T) {
@@ -280,7 +282,14 @@ func TestCheckEventCondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exch.SetDefaults()
+	conf, err := exchange.GetDefaultConfig(context.Background(), exch)
+	if err != nil {
+		t.Error(err)
+	}
+	err = exch.Setup(conf)
+	if err != nil {
+		t.Error(err)
+	}
 	err = em.Add(exch)
 	if !errors.Is(err, nil) {
 		t.Fatalf("received: '%v' but expected: '%v'", err, nil)
@@ -291,7 +300,7 @@ func TestCheckEventCondition(t *testing.T) {
 	}
 	m.m.Lock()
 	err = m.checkEventCondition(&m.events[0])
-	if err != nil && !strings.Contains(err.Error(), "no tickers for") {
+	if err != nil && !errors.Is(err, ticker.ErrNoTickerFound) {
 		t.Error(err)
 	} else if err == nil {
 		t.Error("expected error")
