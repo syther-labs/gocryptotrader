@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,11 +18,15 @@ import (
 	"github.com/thrasher-corp/gocryptotrader/common/file"
 	"github.com/thrasher-corp/gocryptotrader/config"
 	"github.com/thrasher-corp/gocryptotrader/currency"
+	"github.com/thrasher-corp/gocryptotrader/encoding/json"
 	"github.com/thrasher-corp/gocryptotrader/engine"
 	exchange "github.com/thrasher-corp/gocryptotrader/exchanges"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/account"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/asset"
+	"github.com/thrasher-corp/gocryptotrader/exchanges/collateral"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/deposit"
+	"github.com/thrasher-corp/gocryptotrader/exchanges/fundingrate"
+	"github.com/thrasher-corp/gocryptotrader/exchanges/futures"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/kline"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/margin"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/order"
@@ -65,17 +68,19 @@ func main() {
 	log.Println("Loading exchanges..")
 
 	var wg sync.WaitGroup
-	for x := range exchange.Exchanges {
-		name := exchange.Exchanges[x]
+	for i := range exchange.Exchanges {
+		name := exchange.Exchanges[i]
 		if _, ok := wrapperConfig.Exchanges[name]; !ok {
 			wrapperConfig.Exchanges[strings.ToLower(name)] = &config.APICredentialsConfig{}
 		}
 		if shouldLoadExchange(name) {
-			err = bot.LoadExchange(name, &wg)
-			if err != nil {
-				log.Printf("Failed to load exchange %s. Err: %s", name, err)
-				continue
-			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err = bot.LoadExchange(name); err != nil {
+					log.Printf("Failed to load exchange %s. Err: %s", name, err)
+				}
+			}()
 		}
 	}
 	wg.Wait()
@@ -241,7 +246,7 @@ func setExchangeAPIKeys(name string, keys map[string]*config.APICredentialsConfi
 	base.Config.API.AuthenticatedSupport = true
 	base.Config.API.AuthenticatedWebsocketSupport = true
 
-	return base.ValidateAPICredentials(base.GetDefaultCredentials()) == nil
+	return base.VerifyAPICredentials(base.GetDefaultCredentials()) == nil
 }
 
 func parseOrderSide(orderSide string) order.Side {
@@ -344,20 +349,6 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 		log.Printf("Executing wrappers for %v %v %v", base.GetName(), assetTypes[i], p)
 
 		if !authenticatedOnly {
-			var fetchTickerResponse *ticker.Price
-			fetchTickerResponse, err = e.FetchTicker(context.TODO(), p, assetTypes[i])
-			msg = ""
-			if err != nil {
-				msg = err.Error()
-				responseContainer.ErrorCount++
-			}
-			responseContainer.EndpointResponses = append(responseContainer.EndpointResponses, EndpointResponse{
-				SentParams: jsonifyInterface([]interface{}{p, assetTypes[i]}),
-				Function:   "FetchTicker",
-				Error:      msg,
-				Response:   jsonifyInterface([]interface{}{fetchTickerResponse}),
-			})
-
 			var updateTickerResponse *ticker.Price
 			updateTickerResponse, err = e.UpdateTicker(context.TODO(), p, assetTypes[i])
 			msg = ""
@@ -372,8 +363,8 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 				Response:   jsonifyInterface([]interface{}{updateTickerResponse}),
 			})
 
-			var fetchOrderbookResponse *orderbook.Base
-			fetchOrderbookResponse, err = e.FetchOrderbook(context.TODO(), p, assetTypes[i])
+			var GetCachedTickerResponse *ticker.Price
+			GetCachedTickerResponse, err = e.GetCachedTicker(p, assetTypes[i])
 			msg = ""
 			if err != nil {
 				msg = err.Error()
@@ -381,9 +372,9 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			}
 			responseContainer.EndpointResponses = append(responseContainer.EndpointResponses, EndpointResponse{
 				SentParams: jsonifyInterface([]interface{}{p, assetTypes[i]}),
-				Function:   "FetchOrderbook",
+				Function:   "GetCachedTicker",
 				Error:      msg,
-				Response:   jsonifyInterface([]interface{}{fetchOrderbookResponse}),
+				Response:   jsonifyInterface([]interface{}{GetCachedTickerResponse}),
 			})
 
 			var updateOrderbookResponse *orderbook.Base
@@ -398,6 +389,20 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 				Function:   "UpdateOrderbook",
 				Error:      msg,
 				Response:   jsonifyInterface([]interface{}{updateOrderbookResponse}),
+			})
+
+			var GetCachedOrderbookResponse *orderbook.Base
+			GetCachedOrderbookResponse, err = e.GetCachedOrderbook(p, assetTypes[i])
+			msg = ""
+			if err != nil {
+				msg = err.Error()
+				responseContainer.ErrorCount++
+			}
+			responseContainer.EndpointResponses = append(responseContainer.EndpointResponses, EndpointResponse{
+				SentParams: jsonifyInterface([]interface{}{p, assetTypes[i]}),
+				Function:   "GetCachedOrderbook",
+				Error:      msg,
+				Response:   jsonifyInterface([]interface{}{GetCachedOrderbookResponse}),
 			})
 
 			var fetchTradablePairsResponse []currency.Pair
@@ -512,14 +517,14 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 				Response:   jsonifyInterface([]interface{}{""}),
 			})
 
-			fundingRateRequest := &order.FundingRatesRequest{
+			fundingRateRequest := &fundingrate.HistoricalRatesRequest{
 				Asset:     assetTypes[i],
-				Pairs:     currency.Pairs{p},
+				Pair:      p,
 				StartDate: time.Now().Add(-time.Hour),
 				EndDate:   time.Now(),
 			}
-			var fundingRateResponse []order.FundingRates
-			fundingRateResponse, err = e.GetFundingRates(context.TODO(), fundingRateRequest)
+			var fundingRateResponse *fundingrate.HistoricalRates
+			fundingRateResponse, err = e.GetHistoricalFundingRates(context.TODO(), fundingRateRequest)
 			msg = ""
 			if err != nil {
 				msg = err.Error()
@@ -548,28 +553,28 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			})
 		}
 
-		var fetchAccountInfoResponse account.Holdings
-		fetchAccountInfoResponse, err = e.FetchAccountInfo(context.TODO(), assetTypes[i])
+		var GetCachedAccountInfoResponse account.Holdings
+		GetCachedAccountInfoResponse, err = e.GetCachedAccountInfo(context.TODO(), assetTypes[i])
 		msg = ""
 		if err != nil {
 			msg = err.Error()
 			responseContainer.ErrorCount++
 		}
 		responseContainer.EndpointResponses = append(responseContainer.EndpointResponses, EndpointResponse{
-			Function: "FetchAccountInfo",
+			Function: "GetCachedAccountInfo",
 			Error:    msg,
-			Response: jsonifyInterface([]interface{}{fetchAccountInfoResponse}),
+			Response: jsonifyInterface([]interface{}{GetCachedAccountInfoResponse}),
 		})
 
-		var getFundingHistoryResponse []exchange.FundHistory
-		getFundingHistoryResponse, err = e.GetFundingHistory(context.TODO())
+		var getFundingHistoryResponse []exchange.FundingHistory
+		getFundingHistoryResponse, err = e.GetAccountFundingHistory(context.TODO())
 		msg = ""
 		if err != nil {
 			msg = err.Error()
 			responseContainer.ErrorCount++
 		}
 		responseContainer.EndpointResponses = append(responseContainer.EndpointResponses, EndpointResponse{
-			Function: "GetFundingHistory",
+			Function: "GetAccountFundingHistory",
 			Error:    msg,
 			Response: jsonifyInterface([]interface{}{getFundingHistoryResponse}),
 		})
@@ -667,7 +672,7 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			AssetType: assetTypes[i],
 		})
 
-		var CancelBatchOrdersResponse order.CancelBatchResponse
+		var CancelBatchOrdersResponse *order.CancelBatchResponse
 		CancelBatchOrdersResponse, err = e.CancelBatchOrders(context.TODO(), request)
 		msg = ""
 		if err != nil {
@@ -695,7 +700,7 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			Response:   jsonifyInterface([]interface{}{cancellAllOrdersResponse}),
 		})
 
-		var r15 order.Detail
+		var r15 *order.Detail
 		r15, err = e.GetOrderInfo(context.TODO(), config.OrderSubmission.OrderID, p, assetTypes[i])
 		msg = ""
 		if err != nil {
@@ -709,7 +714,7 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			Response:   jsonifyInterface([]interface{}{r15}),
 		})
 
-		historyRequest := order.GetOrdersRequest{
+		historyRequest := order.MultiOrderRequest{
 			Type:      testOrderType,
 			Side:      testOrderSide,
 			Pairs:     []currency.Pair{p},
@@ -731,7 +736,7 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			Response:   jsonifyInterface([]interface{}{getOrderHistoryResponse}),
 		})
 
-		orderRequest := order.GetOrdersRequest{
+		orderRequest := order.MultiOrderRequest{
 			Type:      testOrderType,
 			Side:      testOrderSide,
 			Pairs:     []currency.Pair{p},
@@ -914,11 +919,11 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			Response:   marginRateHistoryResponse,
 		})
 
-		positionSummaryRequest := &order.PositionSummaryRequest{
+		positionSummaryRequest := &futures.PositionSummaryRequest{
 			Asset: assetTypes[i],
 			Pair:  p,
 		}
-		var positionSummaryResponse *order.PositionSummary
+		var positionSummaryResponse *futures.PositionSummary
 		positionSummaryResponse, err = e.GetPositionSummary(context.TODO(), positionSummaryRequest)
 		msg = ""
 		if err != nil {
@@ -927,12 +932,12 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 		}
 		responseContainer.EndpointResponses = append(responseContainer.EndpointResponses, EndpointResponse{
 			SentParams: jsonifyInterface([]interface{}{positionSummaryRequest}),
-			Function:   "GetPositionSummary",
+			Function:   "GetFuturesPositionSummary",
 			Error:      msg,
 			Response:   jsonifyInterface([]interface{}{positionSummaryResponse}),
 		})
 
-		calculatePNLRequest := &order.PNLCalculatorRequest{
+		calculatePNLRequest := &futures.PNLCalculatorRequest{
 			Pair:             p,
 			Underlying:       p.Base,
 			Asset:            assetTypes[i],
@@ -944,7 +949,7 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			EntryAmount:      decimal.NewFromInt(1337),
 			PreviousPrice:    decimal.NewFromInt(1337),
 		}
-		var calculatePNLResponse *order.PNLResult
+		var calculatePNLResponse *futures.PNLResult
 		calculatePNLResponse, err = e.CalculatePNL(context.TODO(), calculatePNLRequest)
 		msg = ""
 		if err != nil {
@@ -958,7 +963,7 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			Response:   jsonifyInterface([]interface{}{calculatePNLResponse}),
 		})
 
-		collateralCalculator := &order.CollateralCalculator{
+		collateralCalculator := &futures.CollateralCalculator{
 			CollateralCurrency: p.Quote,
 			Asset:              assetTypes[i],
 			Side:               testOrderSide,
@@ -967,7 +972,7 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			LockedCollateral:   decimal.NewFromInt(1337),
 			UnrealisedPNL:      decimal.NewFromInt(1337),
 		}
-		var scaleCollateralResponse *order.CollateralByCurrency
+		var scaleCollateralResponse *collateral.ByCurrency
 		scaleCollateralResponse, err = e.ScaleCollateral(context.TODO(), collateralCalculator)
 		msg = ""
 		if err != nil {
@@ -981,10 +986,10 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			Response:   jsonifyInterface([]interface{}{scaleCollateralResponse}),
 		})
 
-		totalCollateralCalculator := &order.TotalCollateralCalculator{
-			CollateralAssets: []order.CollateralCalculator{*collateralCalculator},
+		totalCollateralCalculator := &futures.TotalCollateralCalculator{
+			CollateralAssets: []futures.CollateralCalculator{*collateralCalculator},
 		}
-		var calculateTotalCollateralResponse *order.TotalCollateralResponse
+		var calculateTotalCollateralResponse *futures.TotalCollateralResponse
 		calculateTotalCollateralResponse, err = e.CalculateTotalCollateral(context.TODO(), totalCollateralCalculator)
 		msg = ""
 		if err != nil {
@@ -998,13 +1003,13 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 			Response:   jsonifyInterface([]interface{}{calculateTotalCollateralResponse}),
 		})
 
-		var futuresPositionsResponse []order.PositionDetails
-		futuresPositionsRequest := &order.PositionsRequest{
+		var futuresPositionsResponse []futures.PositionResponse
+		futuresPositionsRequest := &futures.PositionsRequest{
 			Asset:     assetTypes[i],
 			Pairs:     currency.Pairs{p},
 			StartDate: time.Now().Add(-time.Hour),
 		}
-		futuresPositionsResponse, err = e.GetFuturesPositions(context.TODO(), futuresPositionsRequest)
+		futuresPositionsResponse, err = e.GetFuturesPositionOrders(context.TODO(), futuresPositionsRequest)
 		msg = ""
 		if err != nil {
 			msg = err.Error()
@@ -1012,7 +1017,7 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 		}
 		responseContainer.EndpointResponses = append(responseContainer.EndpointResponses, EndpointResponse{
 			SentParams: jsonifyInterface([]interface{}{futuresPositionsRequest}),
-			Function:   "GetFuturesPositions",
+			Function:   "GetFuturesPositionOrders",
 			Error:      msg,
 			Response:   jsonifyInterface([]interface{}{futuresPositionsResponse}),
 		})
@@ -1023,19 +1028,19 @@ func testWrappers(e exchange.IBotExchange, base *exchange.Base, config *Config) 
 }
 
 func jsonifyInterface(params []interface{}) json.RawMessage {
-	response, _ := json.MarshalIndent(params, "", " ") //nolint:errchkjson // TODO: ignore this for now
+	response, _ := json.MarshalIndent(params, "", " ")
 	return response
 }
 
 func loadConfig() (Config, error) {
-	var config Config
+	var cfg Config
 	keys, err := os.ReadFile("wrapperconfig.json")
 	if err != nil {
-		return config, err
+		return cfg, err
 	}
 
-	err = json.Unmarshal(keys, &config)
-	return config, err
+	err = json.Unmarshal(keys, &cfg)
+	return cfg, err
 }
 
 func saveConfig(config *Config) {
@@ -1095,17 +1100,20 @@ func outputToHTML(exchangeResponses []ExchangeResponses) {
 	}
 
 	log.Printf("Outputting to: %v", filepath.Join(dir, fmt.Sprintf("%v.html", outputFileName)))
-	file, err := os.Create(filepath.Join(dir, fmt.Sprintf("%v.html", outputFileName)))
+	f, err := os.Create(filepath.Join(dir, fmt.Sprintf("%v.html", outputFileName)))
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	err = tmpl.Execute(file, exchangeResponses)
+	err = tmpl.Execute(f, exchangeResponses)
 	if err != nil {
 		log.Print(err)
 	}
-	file.Close()
+	err = f.Close()
+	if err != nil {
+		log.Print(err)
+	}
 }
 
 func outputToConsole(exchangeResponses []ExchangeResponses) {

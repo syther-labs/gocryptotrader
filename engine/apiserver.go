@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,7 +18,10 @@ import (
 	"github.com/thrasher-corp/gocryptotrader/common/crypto"
 	"github.com/thrasher-corp/gocryptotrader/config"
 	"github.com/thrasher-corp/gocryptotrader/currency"
+	"github.com/thrasher-corp/gocryptotrader/encoding/json"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/asset"
+	"github.com/thrasher-corp/gocryptotrader/exchanges/orderbook"
+	"github.com/thrasher-corp/gocryptotrader/exchanges/ticker"
 	"github.com/thrasher-corp/gocryptotrader/log"
 )
 
@@ -181,7 +183,7 @@ func (m *apiServerManager) StartRESTServer() error {
 		if err != nil {
 			atomic.StoreInt32(&m.restStarted, 0)
 			if !errors.Is(err, http.ErrServerClosed) {
-				log.Error(log.APIServerMgr, err)
+				log.Errorln(log.APIServerMgr, err)
 			}
 		}
 	}()
@@ -296,7 +298,7 @@ func (m *apiServerManager) restGetAllEnabledAccountInfo(w http.ResponseWriter, r
 func (m *apiServerManager) getIndex(w http.ResponseWriter, _ *http.Request) {
 	_, err := fmt.Fprint(w, restIndexResponse)
 	if err != nil {
-		log.Error(log.APIServerMgr, err)
+		log.Errorln(log.APIServerMgr, err)
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -310,35 +312,24 @@ func getAllActiveOrderbooks(m iExchangeManager) []EnabledExchangeOrderbooks {
 	}
 
 	orderbookData := make([]EnabledExchangeOrderbooks, 0, len(exchanges))
-	for x := range exchanges {
-		assets := exchanges[x].GetAssetTypes(true)
-		exchName := exchanges[x].GetName()
-		var exchangeOB EnabledExchangeOrderbooks
-		exchangeOB.ExchangeName = exchName
-
-		for y := range assets {
-			currencies, err := exchanges[x].GetEnabledPairs(assets[y])
+	for _, e := range exchanges {
+		var orderbooks []orderbook.Base
+		for _, a := range e.GetAssetTypes(true) {
+			pairs, err := e.GetEnabledPairs(a)
 			if err != nil {
-				log.Errorf(log.APIServerMgr,
-					"Exchange %s could not retrieve enabled currencies. Err: %s\n",
-					exchName,
-					err)
+				log.Errorf(log.APIServerMgr, "Exchange %s could not retrieve enabled currencies. Err: %s\n", e.GetName(), err)
 				continue
 			}
-			for z := range currencies {
-				ob, err := exchanges[x].FetchOrderbook(context.TODO(), currencies[z], assets[y])
+			for _, pair := range pairs {
+				ob, err := e.GetCachedOrderbook(pair, a)
 				if err != nil {
-					log.Errorf(log.APIServerMgr,
-						"Exchange %s failed to retrieve %s orderbook. Err: %s\n", exchName,
-						currencies[z].String(),
-						err)
+					log.Errorf(log.APIServerMgr, "Exchange %s failed to retrieve %s orderbook. Err: %s\n", e.GetName(), pair, err)
 					continue
 				}
-				exchangeOB.ExchangeValues = append(exchangeOB.ExchangeValues, *ob)
+				orderbooks = append(orderbooks, *ob)
 			}
-			orderbookData = append(orderbookData, exchangeOB)
 		}
-		orderbookData = append(orderbookData, exchangeOB)
+		orderbookData = append(orderbookData, EnabledExchangeOrderbooks{ExchangeName: e.GetName(), ExchangeValues: orderbooks})
 	}
 	return orderbookData
 }
@@ -351,38 +342,27 @@ func getAllActiveTickers(m iExchangeManager) []EnabledExchangeCurrencies {
 		return nil
 	}
 
-	tickers := make([]EnabledExchangeCurrencies, 0, len(exchanges))
-	for x := range exchanges {
-		assets := exchanges[x].GetAssetTypes(true)
-		exchName := exchanges[x].GetName()
-		var exchangeTickers EnabledExchangeCurrencies
-		exchangeTickers.ExchangeName = exchName
-
-		for y := range assets {
-			currencies, err := exchanges[x].GetEnabledPairs(assets[y])
+	exchangeTickers := make([]EnabledExchangeCurrencies, 0, len(exchanges))
+	for _, e := range exchanges {
+		var tickers []*ticker.Price
+		for _, a := range e.GetAssetTypes(true) {
+			pairs, err := e.GetEnabledPairs(a)
 			if err != nil {
-				log.Errorf(log.APIServerMgr,
-					"Exchange %s could not retrieve enabled currencies. Err: %s\n",
-					exchName,
-					err)
+				log.Errorf(log.APIServerMgr, "Exchange %s could not retrieve enabled currencies. Err: %s\n", e.GetName(), err)
 				continue
 			}
-			for z := range currencies {
-				t, err := exchanges[x].FetchTicker(context.TODO(), currencies[z], assets[y])
+			for _, pair := range pairs {
+				t, err := e.GetCachedTicker(pair, a)
 				if err != nil {
-					log.Errorf(log.APIServerMgr,
-						"Exchange %s failed to retrieve %s ticker. Err: %s\n", exchName,
-						currencies[z].String(),
-						err)
+					log.Errorf(log.APIServerMgr, "Exchange %s failed to retrieve %s ticker. Err: %s\n", e.GetName(), pair.String(), err)
 					continue
 				}
-				exchangeTickers.ExchangeValues = append(exchangeTickers.ExchangeValues, *t)
+				tickers = append(tickers, t)
 			}
-			tickers = append(tickers, exchangeTickers)
 		}
-		tickers = append(tickers, exchangeTickers)
+		exchangeTickers = append(exchangeTickers, EnabledExchangeCurrencies{ExchangeName: e.GetName(), ExchangeValues: tickers})
 	}
-	return tickers
+	return exchangeTickers
 }
 
 // getAllActiveAccounts returns all enabled exchanges accounts
@@ -399,7 +379,7 @@ func getAllActiveAccounts(m iExchangeManager) []AllEnabledExchangeAccounts {
 		exchName := exchanges[x].GetName()
 		var exchangeAccounts AllEnabledExchangeAccounts
 		for y := range assets {
-			a, err := exchanges[x].FetchAccountInfo(context.TODO(), assets[y])
+			a, err := exchanges[x].GetCachedAccountInfo(context.TODO(), assets[y])
 			if err != nil {
 				log.Errorf(log.APIServerMgr,
 					"Exchange %s failed to retrieve %s ticker. Err: %s\n",
@@ -443,7 +423,7 @@ func (m *apiServerManager) StartWebsocketServer() error {
 		if err != nil {
 			atomic.StoreInt32(&m.websocketStarted, 0)
 			if !errors.Is(err, http.ErrServerClosed) {
-				log.Error(log.APIServerMgr, err)
+				log.Errorln(log.APIServerMgr, err)
 			}
 		}
 	}()
@@ -502,7 +482,7 @@ func (c *websocketClient) read() {
 		c.Hub.Unregister <- c
 		conErr := c.Conn.Close()
 		if conErr != nil {
-			log.Error(log.APIServerMgr, conErr)
+			log.Errorln(log.APIServerMgr, conErr)
 		}
 	}()
 
@@ -547,7 +527,7 @@ func (c *websocketClient) read() {
 				log.Warnf(log.APIServerMgr, "Websocket: request %s failed due to unauthenticated request on an authenticated API\n", evt.Event)
 				err = c.SendWebsocketMessage(WebsocketEventResponse{Event: evt.Event, Error: "unauthorised request on authenticated API"})
 				if err != nil {
-					log.Error(log.APIServerMgr, err)
+					log.Errorln(log.APIServerMgr, err)
 				}
 				continue
 			}
@@ -565,7 +545,7 @@ func (c *websocketClient) write() {
 	defer func() {
 		err := c.Conn.Close()
 		if err != nil {
-			log.Error(log.APIServerMgr, err)
+			log.Errorln(log.APIServerMgr, err)
 		}
 	}()
 	for {
@@ -573,7 +553,7 @@ func (c *websocketClient) write() {
 		if !ok {
 			err := c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 			if err != nil {
-				log.Error(log.APIServerMgr, err)
+				log.Errorln(log.APIServerMgr, err)
 			}
 			log.Debugln(log.APIServerMgr, "websocket: hub closed the channel")
 			return
@@ -586,15 +566,15 @@ func (c *websocketClient) write() {
 		}
 		_, err = w.Write(message)
 		if err != nil {
-			log.Error(log.APIServerMgr, err)
+			log.Errorln(log.APIServerMgr, err)
 		}
 
 		// Add queued chat messages to the current websocket message
 		n := len(c.Send)
-		for i := 0; i < n; i++ {
+		for range n {
 			_, err = w.Write(<-c.Send)
 			if err != nil {
-				log.Error(log.APIServerMgr, err)
+				log.Errorln(log.APIServerMgr, err)
 			}
 		}
 
@@ -656,12 +636,12 @@ func (m *apiServerManager) WebsocketClientHandler(w http.ResponseWriter, r *http
 	// Allow insecure origin if the Origin request header is present and not
 	// equal to the Host request header. Default to false
 	if m.remoteConfig.WebsocketRPC.AllowInsecureOrigin {
-		upgrader.CheckOrigin = func(r *http.Request) bool { return true }
+		upgrader.CheckOrigin = func(*http.Request) bool { return true }
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Error(log.APIServerMgr, err)
+		log.Errorln(log.APIServerMgr, err)
 		return
 	}
 
@@ -690,7 +670,7 @@ func (m *apiServerManager) WebsocketClientHandler(w http.ResponseWriter, r *http
 func wsAuth(client *websocketClient, data interface{}) error {
 	d, ok := data.([]byte)
 	if !ok {
-		return errors.New("unable to type assert data")
+		return common.GetTypeAssertError("[]byte", data)
 	}
 
 	wsResp := WebsocketEventResponse{
@@ -703,7 +683,7 @@ func wsAuth(client *websocketClient, data interface{}) error {
 		wsResp.Error = err.Error()
 		sendErr := client.SendWebsocketMessage(wsResp)
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
@@ -726,7 +706,7 @@ func wsAuth(client *websocketClient, data interface{}) error {
 	client.authFailures++
 	sendErr := client.SendWebsocketMessage(wsResp)
 	if sendErr != nil {
-		log.Error(log.APIServerMgr, sendErr)
+		log.Errorln(log.APIServerMgr, sendErr)
 	}
 	if client.authFailures >= client.maxAuthFailures {
 		log.Debugf(log.APIServerMgr,
@@ -753,7 +733,7 @@ func wsGetConfig(client *websocketClient, _ interface{}) error {
 func wsSaveConfig(client *websocketClient, data interface{}) error {
 	d, ok := data.([]byte)
 	if !ok {
-		return errors.New("unable to type assert data")
+		return common.GetTypeAssertError("[]byte", data)
 	}
 
 	wsResp := WebsocketEventResponse{
@@ -765,7 +745,7 @@ func wsSaveConfig(client *websocketClient, data interface{}) error {
 		wsResp.Error = err.Error()
 		sendErr := client.SendWebsocketMessage(wsResp)
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
@@ -776,7 +756,7 @@ func wsSaveConfig(client *websocketClient, data interface{}) error {
 		wsResp.Error = err.Error()
 		sendErr := client.SendWebsocketMessage(wsResp)
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
@@ -786,7 +766,7 @@ func wsSaveConfig(client *websocketClient, data interface{}) error {
 		wsResp.Error = err.Error()
 		sendErr := client.SendWebsocketMessage(wsResp)
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
@@ -794,7 +774,7 @@ func wsSaveConfig(client *websocketClient, data interface{}) error {
 	return client.SendWebsocketMessage(wsResp)
 }
 
-func wsGetAccountInfo(client *websocketClient, data interface{}) error {
+func wsGetAccountInfo(client *websocketClient, _ interface{}) error {
 	accountInfo := getAllActiveAccounts(client.exchangeManager)
 	wsResp := WebsocketEventResponse{
 		Event: "GetAccountInfo",
@@ -803,7 +783,7 @@ func wsGetAccountInfo(client *websocketClient, data interface{}) error {
 	return client.SendWebsocketMessage(wsResp)
 }
 
-func wsGetTickers(client *websocketClient, data interface{}) error {
+func wsGetTickers(client *websocketClient, _ interface{}) error {
 	wsResp := WebsocketEventResponse{
 		Event: "GetTickers",
 	}
@@ -814,7 +794,7 @@ func wsGetTickers(client *websocketClient, data interface{}) error {
 func wsGetTicker(client *websocketClient, data interface{}) error {
 	d, ok := data.([]byte)
 	if !ok {
-		return errors.New("unable to type assert data")
+		return common.GetTypeAssertError("[]byte", data)
 	}
 
 	wsResp := WebsocketEventResponse{
@@ -826,7 +806,7 @@ func wsGetTicker(client *websocketClient, data interface{}) error {
 		wsResp.Error = err.Error()
 		sendErr := client.SendWebsocketMessage(wsResp)
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
@@ -846,16 +826,16 @@ func wsGetTicker(client *websocketClient, data interface{}) error {
 		wsResp.Error = err.Error()
 		sendErr := client.SendWebsocketMessage(wsResp)
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
-	tick, err := exch.FetchTicker(context.TODO(), p, a)
+	tick, err := exch.GetCachedTicker(p, a)
 	if err != nil {
 		wsResp.Error = err.Error()
 		sendErr := client.SendWebsocketMessage(wsResp)
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
@@ -863,7 +843,7 @@ func wsGetTicker(client *websocketClient, data interface{}) error {
 	return client.SendWebsocketMessage(wsResp)
 }
 
-func wsGetOrderbooks(client *websocketClient, data interface{}) error {
+func wsGetOrderbooks(client *websocketClient, _ interface{}) error {
 	wsResp := WebsocketEventResponse{
 		Event: "GetOrderbooks",
 	}
@@ -874,19 +854,15 @@ func wsGetOrderbooks(client *websocketClient, data interface{}) error {
 func wsGetOrderbook(client *websocketClient, data interface{}) error {
 	d, ok := data.([]byte)
 	if !ok {
-		return errors.New("unable to type assert data")
+		return common.GetTypeAssertError("[]byte", data)
 	}
 
-	wsResp := WebsocketEventResponse{
-		Event: "GetOrderbook",
-	}
 	var orderbookReq WebsocketOrderbookTickerRequest
 	err := json.Unmarshal(d, &orderbookReq)
 	if err != nil {
-		wsResp.Error = err.Error()
-		sendErr := client.SendWebsocketMessage(wsResp)
+		sendErr := client.SendWebsocketMessage(WebsocketEventResponse{Event: "GetOrderbook", Error: err.Error()})
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
@@ -903,27 +879,25 @@ func wsGetOrderbook(client *websocketClient, data interface{}) error {
 
 	exch, err := client.exchangeManager.GetExchangeByName(orderbookReq.Exchange)
 	if err != nil {
-		wsResp.Error = err.Error()
-		sendErr := client.SendWebsocketMessage(wsResp)
+		sendErr := client.SendWebsocketMessage(WebsocketEventResponse{Event: "GetOrderbook", Error: err.Error()})
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
-	ob, err := exch.FetchOrderbook(context.TODO(), p, a)
+	ob, err := exch.GetCachedOrderbook(p, a)
 	if err != nil {
-		wsResp.Error = err.Error()
-		sendErr := client.SendWebsocketMessage(wsResp)
+		sendErr := client.SendWebsocketMessage(WebsocketEventResponse{Event: "GetOrderbook", Error: err.Error()})
 		if sendErr != nil {
-			log.Error(log.APIServerMgr, sendErr)
+			log.Errorln(log.APIServerMgr, sendErr)
 		}
 		return err
 	}
-	wsResp.Data = ob
-	return nil
+
+	return client.SendWebsocketMessage(WebsocketEventResponse{Event: "GetOrderbook", Data: ob})
 }
 
-func wsGetExchangeRates(client *websocketClient, data interface{}) error {
+func wsGetExchangeRates(client *websocketClient, _ interface{}) error {
 	wsResp := WebsocketEventResponse{
 		Event: "GetExchangeRates",
 	}
@@ -937,7 +911,7 @@ func wsGetExchangeRates(client *websocketClient, data interface{}) error {
 	return client.SendWebsocketMessage(wsResp)
 }
 
-func wsGetPortfolio(client *websocketClient, data interface{}) error {
+func wsGetPortfolio(client *websocketClient, _ interface{}) error {
 	wsResp := WebsocketEventResponse{
 		Event: "GetPortfolio",
 	}

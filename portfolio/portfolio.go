@@ -2,15 +2,16 @@ package portfolio
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/thrasher-corp/gocryptotrader/common"
 	"github.com/thrasher-corp/gocryptotrader/currency"
+	"github.com/thrasher-corp/gocryptotrader/encoding/json"
 	"github.com/thrasher-corp/gocryptotrader/log"
 )
 
@@ -415,7 +416,7 @@ func (b *Base) GetPortfolioSummary() Summary {
 	var portfolioExchanges []string
 	for i := range b.Addresses {
 		if strings.EqualFold(b.Addresses[i].Description, ExchangeAddress) {
-			if !common.StringDataCompare(portfolioExchanges, b.Addresses[i].Address) {
+			if !slices.Contains(portfolioExchanges, b.Addresses[i].Address) {
 				portfolioExchanges = append(portfolioExchanges, b.Addresses[i].Address)
 			}
 		}
@@ -514,7 +515,7 @@ func (b *Base) IsExchangeSupported(exchange, address string) (ret bool) {
 			continue
 		}
 		exchangeList := strings.Split(b.Addresses[x].SupportedExchanges, ",")
-		return common.StringDataContainsInsensitive(exchangeList, exchange)
+		return common.StringSliceContainsInsensitive(exchangeList, exchange)
 	}
 	return
 }

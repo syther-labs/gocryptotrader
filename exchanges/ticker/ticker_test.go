@@ -10,6 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/thrasher-corp/gocryptotrader/common/key"
 	"github.com/thrasher-corp/gocryptotrader/currency"
 	"github.com/thrasher-corp/gocryptotrader/dispatch"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/asset"
@@ -202,33 +206,20 @@ func TestGetTicker(t *testing.T) {
 func TestFindLast(t *testing.T) {
 	cp := currency.NewPair(currency.BTC, currency.XRP)
 	_, err := FindLast(cp, asset.Spot)
-	if !errors.Is(err, errTickerNotFound) {
-		t.Errorf("received: %v but expected: %v", err, errTickerNotFound)
-	}
+	assert.ErrorIs(t, err, ErrTickerNotFound)
 
 	err = service.update(&Price{Last: 0, ExchangeName: "testerinos", Pair: cp, AssetType: asset.Spot})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "service update must not error")
 
 	_, err = FindLast(cp, asset.Spot)
-	if !errors.Is(err, errInvalidTicker) {
-		t.Errorf("received: %v but expected: %v", err, errInvalidTicker)
-	}
+	assert.ErrorIs(t, err, errInvalidTicker)
 
 	err = service.update(&Price{Last: 1337, ExchangeName: "testerinos", Pair: cp, AssetType: asset.Spot})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "service update must not error")
 
 	last, err := FindLast(cp, asset.Spot)
-	if !errors.Is(err, nil) {
-		t.Errorf("received: %v but expected: %v", err, nil)
-	}
-
-	if last != 1337 {
-		t.Fatal("unexpected value")
-	}
+	assert.NoError(t, err)
+	assert.Equal(t, 1337.0, last)
 }
 
 func TestProcessTicker(t *testing.T) { // non-appending function to tickers
@@ -279,6 +270,37 @@ func TestProcessTicker(t *testing.T) { // non-appending function to tickers
 	}
 	if !result.Pair.Equal(newPair) {
 		t.Fatal("TestProcessTicker pair mismatch")
+	}
+
+	err = ProcessTicker(&Price{
+		ExchangeName: "Bitfinex",
+		Pair:         currency.NewPair(currency.BTC, currency.USD),
+		AssetType:    asset.Margin,
+		Bid:          1337,
+		Ask:          1337,
+	})
+	assert.ErrorIs(t, err, ErrBidEqualsAsk, "ProcessTicker should error locked market")
+
+	err = ProcessTicker(&Price{
+		ExchangeName: "Bitfinex",
+		Pair:         currency.NewPair(currency.BTC, currency.USD),
+		AssetType:    asset.Margin,
+		Bid:          1338,
+		Ask:          1336,
+	})
+	if !errors.Is(err, errBidGreaterThanAsk) {
+		t.Errorf("received: %v but expected: %v", err, errBidGreaterThanAsk)
+	}
+
+	err = ProcessTicker(&Price{
+		ExchangeName: "Bitfinex",
+		Pair:         currency.NewPair(currency.BTC, currency.USD),
+		AssetType:    asset.MarginFunding,
+		Bid:          1338,
+		Ask:          1336,
+	})
+	if !errors.Is(err, nil) {
+		t.Errorf("received: %v but expected: %v", err, nil)
 	}
 
 	// now test for processing a pair with a different quote currency
@@ -335,7 +357,7 @@ func TestProcessTicker(t *testing.T) { // non-appending function to tickers
 	var sm sync.Mutex
 
 	var catastrophicFailure bool
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		if catastrophicFailure {
 			break
 		}
@@ -403,9 +425,7 @@ func TestProcessTicker(t *testing.T) { // non-appending function to tickers
 
 func TestGetAssociation(t *testing.T) {
 	_, err := service.getAssociations("")
-	if !errors.Is(err, errExchangeNameIsEmpty) {
-		t.Errorf("received: %v but expected: %v", err, errExchangeNameIsEmpty)
-	}
+	assert.ErrorIs(t, err, ErrExchangeNameIsEmpty)
 
 	service.mux = nil
 
@@ -415,4 +435,45 @@ func TestGetAssociation(t *testing.T) {
 	}
 
 	service.mux = cpyMux
+}
+
+func TestGetExchangeTickersPublic(t *testing.T) {
+	_, err := GetExchangeTickers("")
+	assert.ErrorIs(t, err, ErrExchangeNameIsEmpty)
+}
+
+func TestGetExchangeTickers(t *testing.T) {
+	t.Parallel()
+	s := Service{
+		Tickers:  make(map[key.ExchangePairAsset]*Ticker),
+		Exchange: make(map[string]uuid.UUID),
+	}
+
+	_, err := s.getExchangeTickers("")
+	assert.ErrorIs(t, err, ErrExchangeNameIsEmpty)
+
+	_, err = s.getExchangeTickers("test")
+	assert.ErrorIs(t, err, errExchangeNotFound)
+
+	s.Tickers[key.ExchangePairAsset{
+		Exchange: "test",
+		Base:     currency.XBT.Item,
+		Quote:    currency.DOGE.Item,
+		Asset:    asset.Futures,
+	}] = &Ticker{
+		Price: Price{
+			Pair:         currency.NewPair(currency.XBT, currency.DOGE),
+			ExchangeName: "test",
+			AssetType:    asset.Futures,
+			OpenInterest: 1337,
+		},
+	}
+	s.Exchange["test"] = uuid.Must(uuid.NewV4())
+
+	resp, err := s.getExchangeTickers("test")
+	assert.NoError(t, err)
+	if len(resp) != 1 {
+		t.Fatal("unexpected length")
+	}
+	assert.Equal(t, 1337.0, resp[0].OpenInterest)
 }

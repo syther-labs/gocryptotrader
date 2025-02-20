@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/thrasher-corp/gocryptotrader/common/key"
 	"github.com/thrasher-corp/gocryptotrader/currency"
 	"github.com/thrasher-corp/gocryptotrader/dispatch"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/asset"
@@ -62,32 +65,20 @@ func TestCollectBalances(t *testing.T) {
 
 func TestGetHoldings(t *testing.T) {
 	err := dispatch.Start(dispatch.DefaultMaxWorkers, dispatch.DefaultJobsLimit)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	err = Process(nil, nil)
-	if !errors.Is(err, errHoldingsIsNil) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errHoldingsIsNil)
-	}
+	assert.ErrorIs(t, err, errHoldingsIsNil)
 
 	err = Process(&Holdings{}, nil)
-	if !errors.Is(err, errExchangeNameUnset) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errExchangeNameUnset)
-	}
+	assert.ErrorIs(t, err, errExchangeNameUnset)
 
-	holdings := Holdings{
-		Exchange: "Test",
-	}
+	holdings := Holdings{Exchange: "Test"}
 
 	err = Process(&holdings, nil)
-	if !errors.Is(err, errCredentialsAreNil) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errCredentialsAreNil)
-	}
+	assert.ErrorIs(t, err, errCredentialsAreNil)
 
 	err = Process(&holdings, happyCredentials)
-	if !errors.Is(err, nil) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, nil)
-	}
+	require.NoError(t, err)
 
 	err = Process(&Holdings{
 		Exchange: "Test",
@@ -96,9 +87,7 @@ func TestGetHoldings(t *testing.T) {
 				ID: "1337",
 			}},
 	}, happyCredentials)
-	if !errors.Is(err, asset.ErrNotSupported) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, asset.ErrNotSupported)
-	}
+	assert.ErrorIs(t, err, asset.ErrNotSupported)
 
 	err = Process(&Holdings{
 		Exchange: "Test",
@@ -119,9 +108,7 @@ func TestGetHoldings(t *testing.T) {
 				},
 			}},
 	}, happyCredentials)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 
 	// process again with no changes
 	err = Process(&Holdings{
@@ -139,85 +126,54 @@ func TestGetHoldings(t *testing.T) {
 				},
 			}},
 	}, happyCredentials)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 
 	_, err = GetHoldings("", nil, asset.Spot)
-	if !errors.Is(err, errExchangeNameUnset) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errExchangeNameUnset)
-	}
+	assert.ErrorIs(t, err, errExchangeNameUnset)
 
 	_, err = GetHoldings("bla", nil, asset.Spot)
-	if !errors.Is(err, errCredentialsAreNil) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errCredentialsAreNil)
-	}
+	assert.ErrorIs(t, err, errCredentialsAreNil)
 
 	_, err = GetHoldings("bla", happyCredentials, asset.Spot)
-	if !errors.Is(err, errExchangeHoldingsNotFound) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errExchangeHoldingsNotFound)
-	}
+	assert.ErrorIs(t, err, ErrExchangeHoldingsNotFound)
 
 	_, err = GetHoldings("bla", happyCredentials, asset.Empty)
-	if !errors.Is(err, asset.ErrNotSupported) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, asset.ErrNotSupported)
-	}
+	assert.ErrorIs(t, err, asset.ErrNotSupported)
 
 	_, err = GetHoldings("Test", happyCredentials, asset.UpsideProfitContract)
-	if !errors.Is(err, errAssetHoldingsNotFound) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errAssetHoldingsNotFound)
-	}
+	assert.ErrorIs(t, err, ErrExchangeHoldingsNotFound)
 
 	_, err = GetHoldings("Test", &Credentials{Key: "BBBBB"}, asset.Spot)
-	if !errors.Is(err, errNoCredentialBalances) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errNoCredentialBalances)
-	}
+	assert.ErrorIs(t, err, errNoCredentialBalances)
 
 	u, err := GetHoldings("Test", happyCredentials, asset.Spot)
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err)
 
-	if u.Accounts[0].ID != "1337" {
-		t.Errorf("expecting 1337 but received %s", u.Accounts[0].ID)
-	}
-
-	if !u.Accounts[0].Currencies[0].Currency.Equal(currency.BTC) {
-		t.Errorf("expecting BTC but received %s",
-			u.Accounts[0].Currencies[0].Currency)
-	}
-
-	if u.Accounts[0].Currencies[0].Total != 100 {
-		t.Errorf("expecting 100 but received %f",
-			u.Accounts[0].Currencies[0].Total)
-	}
-
-	if u.Accounts[0].Currencies[0].Hold != 20 {
-		t.Errorf("expecting 20 but received %f",
-			u.Accounts[0].Currencies[0].Hold)
-	}
+	assert.Equal(t, "test", u.Exchange)
+	require.Len(t, u.Accounts, 1)
+	assert.Equal(t, "1337", u.Accounts[0].ID)
+	assert.Equal(t, asset.Spot, u.Accounts[0].AssetType)
+	require.Len(t, u.Accounts[0].Currencies, 1)
+	assert.Equal(t, currency.BTC, u.Accounts[0].Currencies[0].Currency)
+	assert.Equal(t, 100.0, u.Accounts[0].Currencies[0].Total)
+	assert.Equal(t, 20.0, u.Accounts[0].Currencies[0].Hold)
 
 	_, err = SubscribeToExchangeAccount("nonsense")
-	if !errors.Is(err, errExchangeAccountsNotFound) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errExchangeAccountsNotFound)
-	}
+	assert.ErrorIs(t, err, errExchangeAccountsNotFound)
 
 	p, err := SubscribeToExchangeAccount("Test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func(p dispatch.Pipe, wg *sync.WaitGroup) {
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			c := time.NewTimer(time.Second)
 			select {
-			case <-p.C:
+			case <-p.Channel():
 			case <-c.C:
 			}
 		}
-
 		wg.Done()
 	}(p, &wg)
 
@@ -235,38 +191,28 @@ func TestGetHoldings(t *testing.T) {
 			},
 		}},
 	}, happyCredentials)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 
 	wg.Wait()
 }
 
 func TestGetBalance(t *testing.T) {
+	t.Parallel()
+
 	_, err := GetBalance("", "", nil, asset.Empty, currency.Code{})
-	if !errors.Is(err, errExchangeNameUnset) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errExchangeNameUnset)
-	}
+	assert.ErrorIs(t, err, errExchangeNameUnset)
 
 	_, err = GetBalance("bruh", "", nil, asset.Empty, currency.Code{})
-	if !errors.Is(err, asset.ErrNotSupported) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, asset.ErrNotSupported)
-	}
+	assert.ErrorIs(t, err, asset.ErrNotSupported)
 
 	_, err = GetBalance("bruh", "", nil, asset.Spot, currency.Code{})
-	if !errors.Is(err, errCredentialsAreNil) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errCredentialsAreNil)
-	}
+	assert.ErrorIs(t, err, errCredentialsAreNil)
 
 	_, err = GetBalance("bruh", "", happyCredentials, asset.Spot, currency.Code{})
-	if !errors.Is(err, currency.ErrCurrencyCodeEmpty) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, currency.ErrCurrencyCodeEmpty)
-	}
+	assert.ErrorIs(t, err, currency.ErrCurrencyCodeEmpty)
 
 	_, err = GetBalance("bruh", "", happyCredentials, asset.Spot, currency.BTC)
-	if !errors.Is(err, errExchangeHoldingsNotFound) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errExchangeHoldingsNotFound)
-	}
+	assert.ErrorIs(t, err, ErrExchangeHoldingsNotFound)
 
 	err = Process(&Holdings{
 		Exchange: "bruh",
@@ -277,29 +223,16 @@ func TestGetBalance(t *testing.T) {
 			},
 		},
 	}, happyCredentials)
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err, "process must not error")
 
 	_, err = GetBalance("bruh", "1336", &Credentials{Key: "BBBBB"}, asset.Spot, currency.BTC)
-	if !errors.Is(err, errNoCredentialBalances) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errNoCredentialBalances)
-	}
+	assert.ErrorIs(t, err, errNoCredentialBalances)
 
 	_, err = GetBalance("bruh", "1336", happyCredentials, asset.Spot, currency.BTC)
-	if !errors.Is(err, errNoExchangeSubAccountBalances) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errNoExchangeSubAccountBalances)
-	}
+	assert.ErrorIs(t, err, errNoExchangeSubAccountBalances)
 
 	_, err = GetBalance("bruh", "1337", happyCredentials, asset.Futures, currency.BTC)
-	if !errors.Is(err, errAssetHoldingsNotFound) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errAssetHoldingsNotFound)
-	}
-
-	_, err = GetBalance("bruh", "1337", happyCredentials, asset.Spot, currency.BTC)
-	if !errors.Is(err, errNoBalanceFound) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errNoBalanceFound)
-	}
+	assert.ErrorIs(t, err, errNoExchangeSubAccountBalances)
 
 	err = Process(&Holdings{
 		Exchange: "bruh",
@@ -317,22 +250,15 @@ func TestGetBalance(t *testing.T) {
 			},
 		},
 	}, happyCredentials)
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err, "process must not error")
 
 	bal, err := GetBalance("bruh", "1337", happyCredentials, asset.Spot, currency.BTC)
-	if !errors.Is(err, nil) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, nil)
-	}
+	require.NoError(t, err, "get balance must not error")
 
 	bal.m.Lock()
-	if bal.total != 2 {
-		t.Fatal("unexpected value")
-	}
-	if bal.hold != 1 {
-		t.Fatal("unexpected value")
-	}
+	assert.Equal(t, 2.0, bal.total)
+	assert.Equal(t, 1.0, bal.hold)
+	bal.m.Unlock()
 }
 
 func TestBalanceInternalWait(t *testing.T) {
@@ -473,7 +399,11 @@ func TestUpdate(t *testing.T) {
 		t.Fatal("account should be loaded")
 	}
 
-	b, ok := acc.SubAccounts[Credentials{Key: "AAAAA"}]["1337"][asset.Spot][currency.BTC.Item]
+	b, ok := acc.SubAccounts[Credentials{Key: "AAAAA"}][key.SubAccountCurrencyAsset{
+		SubAccount: "1337",
+		Currency:   currency.BTC.Item,
+		Asset:      asset.Spot,
+	}]
 	if !ok {
 		t.Fatal("account should be loaded")
 	}

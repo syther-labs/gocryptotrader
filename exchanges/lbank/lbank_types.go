@@ -1,10 +1,10 @@
 package lbank
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/thrasher-corp/gocryptotrader/currency"
+	"github.com/thrasher-corp/gocryptotrader/encoding/json"
 )
 
 // Ticker stores the ticker price data for a currency pair
@@ -234,6 +234,11 @@ type ErrCapture struct {
 type GetAllOpenIDResp struct {
 	CurrencyPair string
 	OrderID      string
+}
+
+// TimestampResponse holds timestamp data
+type TimestampResponse struct {
+	Timestamp int64 `json:"data"`
 }
 
 var errorCodes = map[int64]string{

@@ -48,8 +48,8 @@ func TestExchangeManagerAdd(t *testing.T) {
 		t.Fatalf("received: '%v' but expected: '%v'", err, nil)
 	}
 	err = m.Add(b)
-	if !errors.Is(err, errExchangeAlreadyLoaded) {
-		t.Fatalf("received: '%v' but expected: '%v'", err, errExchangeAlreadyLoaded)
+	if !errors.Is(err, ErrExchangeAlreadyLoaded) {
+		t.Fatalf("received: '%v' but expected: '%v'", err, ErrExchangeAlreadyLoaded)
 	}
 	exchanges, err := m.GetExchanges()
 	if err != nil {
@@ -159,7 +159,8 @@ func TestNewExchangeByName(t *testing.T) {
 		t.Fatalf("received: '%v' but expected: '%v'", err, ErrExchangeNameIsEmpty)
 	}
 
-	exchanges := []string{"binanceus", "binance", "bitfinex", "bitflyer", "bithumb", "bitmex", "bitstamp", "bittrex", "btc markets", "btse", "bybit", "coinut", "exmo", "coinbasepro", "gateio", "gemini", "hitbtc", "huobi", "itbit", "kraken", "lbank", "okcoin international", "okx", "poloniex", "yobit", "zb", "fake"}
+	exchanges := exchange.Exchanges
+	exchanges = append(exchanges, "fake")
 	for i := range exchanges {
 		var exch exchange.IBotExchange
 		exch, err = m.NewExchangeByName(exchanges[i])

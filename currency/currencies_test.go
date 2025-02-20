@@ -1,8 +1,10 @@
 package currency
 
 import (
-	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/thrasher-corp/gocryptotrader/encoding/json"
 )
 
 func TestCurrenciesUnmarshalJSON(t *testing.T) {
@@ -61,4 +63,14 @@ func TestMatch(t *testing.T) {
 	if c.Match(NewCurrenciesFromStringArray([]string{"btc", "usd", "ltc", "bro", "garbo"})) {
 		t.Fatal("should not match")
 	}
+}
+
+func TestCurrenciesAdd(t *testing.T) {
+	c := Currencies{}
+	c = c.Add(BTC)
+	assert.Len(t, c, 1, "Should have one currency")
+	c = c.Add(ETH)
+	assert.Len(t, c, 2, "Should have two currencies")
+	c = c.Add(BTC)
+	assert.Len(t, c, 2, "Adding a duplicate should not change anything")
 }
